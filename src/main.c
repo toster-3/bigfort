@@ -65,10 +65,10 @@ void printf_s(const char *fmt, ...)
 void setup(uint64_t real_seed)
 {
 	seed = real_seed & MASK48;
-	// start = 3750000 / REGIONSIZE + 1;
-	// end = 30000000 / REGIONSIZE;
-	start = 10000 / REGIONSIZE + 1;
-	end = 1000000 / REGIONSIZE;
+	start = 3750000 / REGIONSIZE + 1;
+	end = 30000000 / REGIONSIZE;
+	// start = 10000 / REGIONSIZE + 1;
+	// end = 1000000 / REGIONSIZE;
 	for (int i = 0; i < 20; i++) {
 		biggest[i].size.x = 0;
 		biggest[i].size.y = 0;
