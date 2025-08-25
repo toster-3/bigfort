@@ -15,8 +15,9 @@
 typedef unsigned long long ull;
 typedef struct {
 	Pos3 size;
-	ull volume;
 	Pos where;
+	ull volume;
+	int n_pieces;
 } Result;
 void result_set(Result *a, Result *b)
 {
@@ -26,6 +27,7 @@ void result_set(Result *a, Result *b)
 	a->volume = b->volume;
 	a->where.x = b->where.x;
 	a->where.z = b->where.z;
+	a->n_pieces = b->n_pieces;
 }
 
 uint64_t seed;
@@ -47,10 +49,11 @@ void setup(uint64_t real_seed)
 		biggest[i].volume = 0;
 		biggest[i].where.x = 0;
 		biggest[i].where.z = 0;
+		biggest[i].n_pieces = 0;
 	}
 }
 
-void is_big(Pos3 *size, Pos *where)
+void is_big(Pos3 *size, Pos *where, int n_pieces)
 {
 	ull volume = size->x * size->y * size->z;
 	int idx = 20;
@@ -73,16 +76,18 @@ void is_big(Pos3 *size, Pos *where)
 		biggest[idx].size.z = size->z;
 		biggest[idx].where.x = where->x;
 		biggest[idx].where.z = where->z;
+		biggest[idx].n_pieces = n_pieces;
 	}
 
 	if (idx == 0) {
-		printf("new biggest ! %dx%dx%d (%llu) at %d, %d\n", biggest[0].size.x,
-		       biggest[0].size.y, biggest[0].size.z, biggest[0].volume,
-		       biggest[0].where.x, biggest[0].where.z);
+		printf("new biggest ! %dx%dx%d (%llu) at %d, %d with %d pieces\n",
+		       biggest[0].size.x, biggest[0].size.y, biggest[0].size.z,
+		       biggest[0].volume, biggest[0].where.x, biggest[0].where.z,
+		       biggest[0].n_pieces);
 	}
 }
 
-void get_fortress_size(Pos3 *size, int mc, uint64_t seed, Pos *p)
+int get_fortress_size(Pos3 *size, int mc, uint64_t seed, Pos *p)
 {
 	Pos3 bb0 = {40000000, 40000000, 40000000},
 	     bb1 = {-40000000, -40000000, -40000000};
@@ -116,6 +121,8 @@ void get_fortress_size(Pos3 *size, int mc, uint64_t seed, Pos *p)
 	size->x = bb1.x - bb0.x;
 	size->y = bb1.y - bb0.y;
 	size->z = bb1.z - bb0.z;
+
+	return n;
 }
 
 void do_it(size_t corner)
@@ -138,8 +145,8 @@ void do_it(size_t corner)
 			if (!isViableStructurePos(Fortress, &g, p.x, p.z, 0))
 				continue;
 
-			get_fortress_size(&size, mc, seed, &p);
-			is_big(&size, &p);
+			int n = get_fortress_size(&size, mc, seed, &p);
+			is_big(&size, &p, n);
 		}
 	}
 }
@@ -161,9 +168,10 @@ int main(int argc, char **argv)
 
 	puts("biggest 20 are:");
 	for (int i = 0; i < 20; i++) {
-		printf("%d. %dx%dx%d (%llu) at %d, %d\n", i, biggest[0].size.x,
-		       biggest[0].size.y, biggest[0].size.z, biggest[0].volume,
-		       biggest[0].where.x, biggest[0].where.z);
+		printf("%d. %dx%dx%d (%llu) at %d, %d with %d pieces\n", i + 1,
+		       biggest[i].size.x, biggest[i].size.y, biggest[i].size.z,
+		       biggest[i].volume, biggest[i].where.x, biggest[i].where.z,
+		       biggest[i].n_pieces);
 	}
 
 	return 0;
