@@ -25,10 +25,10 @@ LIBS := lib/cubiomes/libcubiomes.a
 all: $(BUILD_DIR) $(BUILD_DIR)/$(TARGET_EXE)
 
 $(BUILD_DIR)/$(TARGET_EXE): $(OBJ) $(LIBS)
-	$(CC) $(OBJ) -o $@ $(LDFLAGS) $(LIBS)
+	$(CC) $(OBJ) -o $@ $(LDFLAGS) $(LIBS) -pthread
 
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
-	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@ -pthread
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
