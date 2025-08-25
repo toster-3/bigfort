@@ -18,7 +18,7 @@ INC_DIR   := src lib/cubiomes
 
 CPPFLAGS += $(addprefix -I,$(INC_DIR))
 
-SRC  := $(shell find $(SRC_DIR) -name '*.c')
+SRC  := src/main.c
 OBJ  := $(addprefix $(BUILD_DIR)/, $(notdir $(SRC:.c=.o)))
 LIBS := lib/cubiomes/libcubiomes.a
 
