@@ -1,0 +1,14 @@
+BasedOnStyle: LLVM
+IndentWidth: 4
+TabWidth: 4
+UseTab: ForIndentation
+BreakBeforeBraces: Custom
+AllowShortLoopsOnASingleLine: false #  this is just for loops like for(; *s; s++);
+IndentAccessModifiers: false
+AccessModifierOffset: -4
+AllowShortFunctionsOnASingleLine: Inline
+BraceWrapping:
+  AfterFunction: true
+  AfterControlStatement: false
+  AfterEnum: false
+  AfterClass: false
