@@ -1,12 +1,12 @@
-MODE     := native
+MODE     := dev
 ifeq ($(MODE), dev)
-	OFLAGS := -g -O0 -DDEBUG
+	OFLAGS := -g -O0 -DDEBUG -fsanitize=address
 else
 	OFLAGS := -O3 -march=native -fwrapv -ffast-math
 endif
 CPPFLAGS :=
-CFLAGS   := -std=c11 -pedantic -Wall $(OFLAGS)
-LDFLAGS  := -lc -lm
+CFLAGS   := -std=c11 -pedantic -Wall -Wextra $(OFLAGS)
+LDFLAGS  := -lc -lm -fsanitize=address
 
 CC = cc
 
