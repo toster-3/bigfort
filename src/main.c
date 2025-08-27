@@ -1,13 +1,12 @@
+#include <pthread.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
 
-#include <pthread.h>
-
+#include "arg.h"
 #include "biomes.h"
 #include "finders.h"
 #include "generator.h"
@@ -16,7 +15,7 @@
 #define MAX_PIECES 400
 // as per mc wiki
 #define REGIONSIZE 432
-#define NUM_THREADS 24
+int n_threads = 24;
 
 typedef unsigned long long ull;
 typedef struct {
@@ -53,13 +52,17 @@ void result_set(Result *a, Result *b)
 
 uint64_t seed;
 Pos corners[4] = {{1, 1}, {1, -1}, {-1, 1}, {-1, -1}};
-char *names[4] = {"single", "double", "triple", "QUAD QUAD QUAD QUAD"};
-int64_t start;
-int64_t end;
+char *names[4] = {"single", "double", "triple", "quad"};
+int64_t start = 3750000;
+int64_t end = 30000000;
+char *argv0;
 
 pthread_mutex_t printlock;
+pthread_mutex_t sortlock[4];
+#define BIGGEST_LEN 10
 
-Result biggest[4][NUM_THREADS];
+Result biggest[4][BIGGEST_LEN];
+ull smallest[4];
 
 void printf_s(const char *fmt, ...)
 {
@@ -72,15 +75,20 @@ void printf_s(const char *fmt, ...)
 	va_end(ap);
 }
 
+int cmp(const void *a, const void *b)
+{
+	Result *ra = (Result *)a;
+	Result *rb = (Result *)b;
+	return (rb->volume - ra->volume);
+}
+
 void setup(uint64_t real_seed)
 {
 	seed = real_seed & MASK48;
-	start = 3750000 / REGIONSIZE + 1;
-	end = 30000000 / REGIONSIZE;
-	// start = 1000 / REGIONSIZE + 1;
-	// end = 100000 / REGIONSIZE;
+	start = start / REGIONSIZE + 1;
+	end = end / REGIONSIZE;
 	for (int j = 0; j < 4; j++) {
-		for (int i = 0; i < NUM_THREADS; i++) {
+		for (int i = 0; i < BIGGEST_LEN; i++) {
 			for (int k = 0; k < 4; k++) {
 				biggest[j][i].size[k].x = 0;
 				biggest[j][i].size[k].y = 0;
@@ -90,8 +98,12 @@ void setup(uint64_t real_seed)
 			biggest[j][i].where.x = 0;
 			biggest[j][i].where.z = 0;
 		}
+		smallest[j] = 0;
 	}
 	pthread_mutex_init(&printlock, NULL);
+	for (int i = 0; i < 4; i++) {
+		pthread_mutex_init(&sortlock[i], NULL);
+	}
 }
 
 void strsize(char *s, Pos3 *size, int n_forts)
@@ -103,32 +115,101 @@ void strsize(char *s, Pos3 *size, int n_forts)
 	sprintf(curpos, "%dx%dx%d", size[n_forts].x, size[n_forts].y, size[n_forts].z);
 }
 
-void is_big(BoundBox *bbs[4], int n_forts, Pos *pos, int tid)
+ull bb_volume(BoundBox *b)
+{
+	if (b->end.x <= b->start.x || b->end.y <= b->start.y || b->end.z <= b->start.z)
+		return 0;
+	return (b->end.x - b->start.x) * (b->end.y - b->start.y) * (b->end.z - b->start.z);
+}
+
+BoundBox intersect(BoundBox *a, BoundBox *b)
+{
+	BoundBox ret = {0};
+
+	ret.start.x = (a->start.x > b->start.x) ? a->start.x : b->start.x;
+	ret.end.x = (a->end.x < b->end.x) ? a->end.x : b->end.x;
+	ret.start.y = (a->start.y > b->start.y) ? a->start.y : b->start.y;
+	ret.end.y = (a->end.y < b->end.y) ? a->end.y : b->end.y;
+	ret.start.z = (a->start.z > b->start.z) ? a->start.z : b->start.z;
+	ret.end.z = (a->end.z < b->end.z) ? a->end.z : b->end.z;
+
+	return ret;
+}
+
+BoundBox intersect_n(BoundBox *bbs, int *idx, int n)
+{
+	BoundBox ret = bbs[idx[0]];
+	for (int i = 1; i < n; i++) {
+		ret = intersect(&ret, &bbs[idx[i]]);
+	}
+	return ret;
+}
+
+ull union_n(BoundBox *bbs, int n)
+{
+	ull total = 0;
+
+	for (int mask = 1; mask < (1 << n); mask++) {
+		int idx[4] = {0}, k = 0;
+
+		for (int i = 0; i < n; i++) {
+			if (mask & (1 << i))
+				idx[k++] = i;
+		}
+
+		BoundBox inter = intersect_n(bbs, idx, k);
+		ull volume = bb_volume(&inter);
+
+		if (k % 2 == 1)
+			total += volume;
+		else
+			total -= volume;
+	}
+
+	return total;
+}
+
+void is_big(BoundBox bbs[4], int n_forts, Pos *pos, int tid)
 {
 	Pos3 size[4];
 	char size_str[127];
+	ull volume = union_n(bbs, n_forts);
+	for (int i = 0; i <= n_forts; i++) {
+		size[i].x = bbs[i].end.x - bbs[i].start.x;
+		size[i].y = bbs[i].end.y - bbs[i].start.y;
+		size[i].z = bbs[i].end.z - bbs[i].start.z;
+	}
+	/*
 	ull volume = 0;
 	for (int i = 0; i <= n_forts; i++) {
-		size[i].x = bbs[i]->end.x - bbs[i]->start.x;
-		size[i].y = bbs[i]->end.y - bbs[i]->start.y;
-		size[i].z = bbs[i]->end.z - bbs[i]->start.z;
-		volume += size[i].x * size[i].y * size[i].z;
+	    size[i].x = bbs[i].end.x - bbs[i].start.x;
+	    size[i].y = bbs[i].end.y - bbs[i].start.y;
+	    size[i].z = bbs[i].end.z - bbs[i].start.z;
+	    volume += size[i].x * size[i].y * size[i].z;
 	}
+	*/
 
-	if (volume > biggest[n_forts][tid].volume) {
+	if (volume < smallest[n_forts])
+		return;
+
+	pthread_mutex_lock(&sortlock[n_forts]);
+
+	if (volume > biggest[n_forts][BIGGEST_LEN - 1].volume) {
 		for (int i = 0; i <= n_forts; i++) {
-			biggest[n_forts][tid].size[i].x = size[i].x;
-			biggest[n_forts][tid].size[i].y = size[i].y;
-			biggest[n_forts][tid].size[i].z = size[i].z;
+			biggest[n_forts][BIGGEST_LEN - 1].size[i].x = size[i].x;
+			biggest[n_forts][BIGGEST_LEN - 1].size[i].y = size[i].y;
+			biggest[n_forts][BIGGEST_LEN - 1].size[i].z = size[i].z;
 		}
-		biggest[n_forts][tid].volume = volume;
-		biggest[n_forts][tid].where.x = pos->x;
-		biggest[n_forts][tid].where.z = pos->z;
-
+		biggest[n_forts][BIGGEST_LEN - 1].volume = volume;
+		biggest[n_forts][BIGGEST_LEN - 1].where.x = pos->x;
+		biggest[n_forts][BIGGEST_LEN - 1].where.z = pos->z;
+		qsort(biggest[n_forts], BIGGEST_LEN, sizeof(Result), cmp);
+		smallest[n_forts] = biggest[n_forts][BIGGEST_LEN - 1].volume;
 		strsize(size_str, size, n_forts);
-		printf_s("new biggest %s in thread %d ! %s (%llu) at %d %d\n", names[n_forts], tid, size_str, volume, pos->x,
-		         pos->z);
+		printf_s("new %s from thread %d ! %s (%llu) at %d %d\n", names[n_forts], tid, size_str, volume, pos->x, pos->z);
 	}
+
+	pthread_mutex_unlock(&sortlock[n_forts]);
 }
 
 void get_fortress_bb(BoundBox *bb, int mc, uint64_t seed, Pos *p)
@@ -203,12 +284,7 @@ set_pos:
 	return 1;
 }
 
-inline ull bb_volume(BoundBox *bb)
-{
-	return (bb->end.x - bb->start.x) * (bb->end.y - bb->start.y) * (bb->end.z - bb->start.z);
-}
-
-int intersect(BoundBox *a, BoundBox *b)
+int overlaps(BoundBox *a, BoundBox *b)
 {
 	int collision = 0;
 
@@ -226,7 +302,7 @@ void *do_it(void *arg)
 	Generator g;
 	int bufsize = data->end - data->start + 3;
 	int _x, _z;
-	BoundBox *buf[3], *bbs[4];
+	BoundBox *buf[3], bbs[4];
 	for (int i = 0; i < 3; i++) {
 		buf[i] = calloc(bufsize, sizeof(BoundBox));
 		if (!buf[i]) {
@@ -250,43 +326,43 @@ void *do_it(void *arg)
 			if (!fort_at(&buf[1][idx], x, z, &g, &p)) {
 				continue;
 			}
-			bbs[n_forts++] = &buf[1][idx];
+			bbs[n_forts++] = buf[1][idx];
 
 			// X
 			if (fort_at(&buf[1][idx + 1], (_x + 1) * corners[data->corner].x, z, &g, NULL)) {
-				if (intersect(&buf[1][idx], &buf[1][idx + 1])) {
-					bbs[n_forts++] = &buf[1][idx + 1];
+				if (overlaps(&buf[1][idx], &buf[1][idx + 1])) {
+					bbs[n_forts++] = buf[1][idx + 1];
 				}
 				where[0] = 1;
 			} else if (fort_at(&buf[1][idx - 1], (_x - 1) * corners[data->corner].x, z, &g, NULL)) {
-				if (intersect(&buf[1][idx], &buf[1][idx - 1])) {
-					bbs[n_forts++] = &buf[1][idx - 1];
+				if (overlaps(&buf[1][idx], &buf[1][idx - 1])) {
+					bbs[n_forts++] = buf[1][idx - 1];
 				}
 				where[0] = -1;
 			}
 
 			// Z
 			if (fort_at(&buf[2][idx], x, (_z + 1) * corners[data->corner].z, &g, NULL)) {
-				if (intersect(&buf[1][idx], &buf[2][idx])) {
-					bbs[n_forts++] = &buf[2][idx];
+				if (overlaps(&buf[1][idx], &buf[2][idx])) {
+					bbs[n_forts++] = buf[2][idx];
 				}
 				where[1] = 1;
 			} else if (fort_at(&buf[0][idx], x, (_z - 1) * corners[data->corner].z, &g, NULL)) {
-				if (intersect(&buf[1][idx], &buf[0][idx])) {
-					bbs[n_forts++] = &buf[0][idx];
+				if (overlaps(&buf[1][idx], &buf[0][idx])) {
+					bbs[n_forts++] = buf[0][idx];
 				}
 				where[1] = -1;
 			}
 
-			BoundBox *fourth = &buf[1 + where[0]][idx + where[1]];
+			BoundBox fourth = buf[1 + where[0]][idx + where[1]];
 			int fourth_x = (_x + where[0]) * corners[data->corner].x;
 			int fourth_z = (_z + where[1]) * corners[data->corner].z;
-			if (n_forts == 3 && fort_at(fourth, fourth_x, fourth_z, &g, NULL) && intersect(&buf[1][idx], fourth) &&
-			    intersect(&buf[1 + where[0]][idx], fourth) && intersect(&buf[1][idx + where[0]], fourth)) {
+			if (n_forts == 3 && fort_at(&fourth, fourth_x, fourth_z, &g, NULL) && overlaps(&buf[1][idx], &fourth) &&
+			    overlaps(&buf[1 + where[0]][idx], &fourth) && overlaps(&buf[1][idx + where[0]], &fourth)) {
 				bbs[n_forts++] = fourth;
 			}
 			/*
-			if (n_forts == 3 && fort_at(fourth, fourth_x, fourth_z, &g, NULL) && intersect(&buf[1][idx], fourth)) {
+			if (n_forts == 3 && fort_at(fourth, fourth_x, fourth_z, &g, NULL) && overlaps(&buf[1][idx], fourth)) {
 			    bbs[n_forts++] = fourth;
 			}
 			*/
@@ -317,33 +393,65 @@ void *do_it(void *arg)
 	pthread_exit(NULL);
 }
 
-int cmp(const void *a, const void *b)
+void usage(void)
 {
-	Result *ra = (Result *)a;
-	Result *rb = (Result *)b;
-	return (rb->volume - ra->volume);
+	fprintf(stderr,
+	        "Usage: %s -S <SEED>\n"
+	        "Options:\n"
+	        "\t-h | --help           : show this help message\n"
+	        "\t-S | --seed <SEED>    : set the seed\n"
+	        "\t-s | --start <START>  : set starting coordinate\n"
+	        "\t-e | --end   <END>    : set ending coordinate\n"
+	        "\t-j | --jobs <THREADS> : use <THREADS> threads, 24 by default\n",
+	        argv0);
+	exit(0);
 }
 
 int main(int argc, char **argv)
 {
-	if (argc < 2) {
-		puts("usage: bigfort <SEED>");
-		return 1;
+	LONG_ARGSTRUCT{{"help", 'h'}, {"seed", 'S'}, {"start", 's'}, {"end", 'e'}, {"jobs", 'j'}};
+
+	int can_i_do_shit = false;
+	uint64_t real_seed = 0;
+
+	ELONG_ARGBEGIN(usage())
+	{
+	case 'h':
+		usage();
+		break;
+	case 'S':
+		can_i_do_shit = true;
+		real_seed = strtoull(EARGF(usage()), NULL, 0);
+		break;
+	case 's':
+		start = strtol(EARGF(usage()), NULL, 0);
+		break;
+	case 'e':
+		end = strtol(EARGF(usage()), NULL, 0);
+		break;
+	case 'j':
+		n_threads = strtol(EARGF(usage()), NULL, 0);
+	}
+	ARGEND;
+
+	if (can_i_do_shit == false) {
+		usage();
 	}
 
-	uint64_t real_seed = strtoull(argv[1], NULL, 0);
-	pthread_t threads[NUM_THREADS];
-	ThreadData tdata[NUM_THREADS];
+	printf("start = %lu, end = %lu, n_threads = %d, seed = %lu\n", start, end, n_threads, real_seed);
+
+	pthread_t threads[n_threads];
+	ThreadData tdata[n_threads];
 
 	setup(real_seed);
 
-	int chunk_size = (end - start) / NUM_THREADS + 1;
+	int chunk_size = (end - start) / n_threads + 1;
 
 	for (int i = 0; i < 4; i++) {
-		for (int t = 0; t < NUM_THREADS; t++) {
+		for (int t = 0; t < n_threads; t++) {
 			tdata[t].thread_id = t;
 			tdata[t].start = start + t * chunk_size;
-			tdata[t].end = (t == NUM_THREADS - 1) ? end : start + (t + 1) * chunk_size;
+			tdata[t].end = (t == n_threads - 1) ? end : start + (t + 1) * chunk_size;
 			tdata[t].corner = i;
 
 			int status;
@@ -353,7 +461,7 @@ int main(int argc, char **argv)
 				exit(-1);
 			}
 		}
-		for (int t = 0; t < NUM_THREADS; t++) {
+		for (int t = 0; t < n_threads; t++) {
 			pthread_join(threads[t], NULL);
 		}
 		printf("====================\n"
@@ -363,7 +471,7 @@ int main(int argc, char **argv)
 	}
 
 	for (int i = 0; i < 4; i++) {
-		qsort(biggest[i], NUM_THREADS, sizeof(Result), cmp);
+		qsort(biggest[i], BIGGEST_LEN, sizeof(Result), cmp);
 	}
 	char size_str[127];
 	FILE *f = fopen("results.txt", "w");
@@ -373,7 +481,7 @@ int main(int argc, char **argv)
 
 	for (int i = 0; i < 4; i++) {
 		fprintf(f, "%ss:\n", names[i]);
-		for (int j = 0; j < NUM_THREADS; j++) {
+		for (int j = 0; j < BIGGEST_LEN; j++) {
 			strsize(size_str, biggest[i][j].size, i);
 			fprintf(f, "%d. %s (%llu) at %d %d\n", j + 1, size_str, biggest[i][j].volume, biggest[i][j].where.x,
 			        biggest[i][j].where.z);

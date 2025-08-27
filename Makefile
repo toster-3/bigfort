@@ -1,4 +1,4 @@
-MODE     := dev
+MODE     := native
 ifeq ($(MODE), dev)
 	OFLAGS := -g -O0 -DDEBUG -fsanitize=address
 else
