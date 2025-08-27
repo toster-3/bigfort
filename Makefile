@@ -6,7 +6,7 @@ else
 endif
 CPPFLAGS :=
 CFLAGS   := -std=c11 -pedantic -Wall -Wextra $(OFLAGS)
-LDFLAGS  := -lc -lm -fsanitize=address
+LDFLAGS  := -lc -lm
 
 CC = cc
 
