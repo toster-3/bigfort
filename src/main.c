@@ -35,6 +35,7 @@ typedef struct {
 typedef struct {
 	Pos3 start;
 	Pos3 end;
+	bool counted[4];
 	int checked;
 	int pieces;
 } BoundBox;
@@ -124,16 +125,16 @@ BoundBox intersect(BoundBox *a, BoundBox *b)
 	return ret;
 }
 
-BoundBox intersect_n(BoundBox *bbs, int *idx, int n)
+BoundBox intersect_n(BoundBox *bbs[4], int *idx, int n)
 {
-	BoundBox ret = bbs[idx[0]];
+	BoundBox ret = *bbs[idx[0]];
 	for (int i = 1; i < n; i++) {
-		ret = intersect(&ret, &bbs[idx[i]]);
+		ret = intersect(&ret, bbs[idx[i]]);
 	}
 	return ret;
 }
 
-ull union_n(BoundBox *bbs, int n)
+ull union_n(BoundBox *bbs[4], int n)
 {
 	ull total = 0, volume;
 	BoundBox inter;
@@ -158,15 +159,23 @@ ull union_n(BoundBox *bbs, int n)
 	return total;
 }
 
-void is_big(BoundBox bbs[4], int n_forts, Pos *pos, int tid)
+void is_big(BoundBox *bbs[4], int n_forts, Pos *pos, int tid)
 {
 	Pos3 size[4];
 	char size_str[127];
-	ull volume = union_n(bbs, n_forts + 1);
+	ull volume;
+
+	for (int i = 0; i < n_forts + 1; i++) {
+		if (bbs[i]->counted[n_forts]) {
+			printf_s("hi hi hello\n");
+			return;
+		}
+	}
+	volume = union_n(bbs, n_forts + 1);
 	for (int i = 0; i <= n_forts; i++) {
-		size[i].x = bbs[i].end.x - bbs[i].start.x;
-		size[i].y = bbs[i].end.y - bbs[i].start.y;
-		size[i].z = bbs[i].end.z - bbs[i].start.z;
+		size[i].x = bbs[i]->end.x - bbs[i]->start.x;
+		size[i].y = bbs[i]->end.y - bbs[i]->start.y;
+		size[i].z = bbs[i]->end.z - bbs[i]->start.z;
 	}
 
 	if (volume < smallest[n_forts])
@@ -175,7 +184,8 @@ void is_big(BoundBox bbs[4], int n_forts, Pos *pos, int tid)
 	pthread_mutex_lock(&sortlock[n_forts]);
 
 	if (volume > biggest[n_forts][BIGGEST_LEN - 1].volume) {
-		for (int i = 0; i <= n_forts; i++) {
+		for (int i = 0; i < n_forts; i++) {
+			bbs[i]->counted[n_forts] = true;
 			biggest[n_forts][BIGGEST_LEN - 1].size[i].x = size[i].x;
 			biggest[n_forts][BIGGEST_LEN - 1].size[i].y = size[i].y;
 			biggest[n_forts][BIGGEST_LEN - 1].size[i].z = size[i].z;
@@ -282,7 +292,7 @@ void *do_it(void *arg)
 	Generator g;
 	int bufsize = data->end - data->start + 3;
 	int _x, _z;
-	BoundBox *buf[3], bbs[4];
+	BoundBox *buf[3], *bbs[4];
 	for (int i = 0; i < 3; i++) {
 		buf[i] = calloc(bufsize, sizeof(BoundBox));
 		if (!buf[i]) {
@@ -306,17 +316,17 @@ void *do_it(void *arg)
 			if (!fort_at(&buf[1][idx], x, z, &g, &p)) {
 				continue;
 			}
-			bbs[n_forts++] = buf[1][idx];
+			bbs[n_forts++] = &buf[1][idx];
 
 			// X
 			if (fort_at(&buf[1][idx + 1], (_x + 1) * corners[data->corner].x, z, &g, NULL)) {
 				if (overlaps(&buf[1][idx], &buf[1][idx + 1])) {
-					bbs[n_forts++] = buf[1][idx + 1];
+					bbs[n_forts++] = &buf[1][idx + 1];
 				}
 				where[0] = 1;
 			} else if (fort_at(&buf[1][idx - 1], (_x - 1) * corners[data->corner].x, z, &g, NULL)) {
 				if (overlaps(&buf[1][idx], &buf[1][idx - 1])) {
-					bbs[n_forts++] = buf[1][idx - 1];
+					bbs[n_forts++] = &buf[1][idx - 1];
 				}
 				where[0] = -1;
 			}
@@ -324,12 +334,12 @@ void *do_it(void *arg)
 			// Z
 			if (fort_at(&buf[2][idx], x, (_z + 1) * corners[data->corner].z, &g, NULL)) {
 				if (overlaps(&buf[1][idx], &buf[2][idx])) {
-					bbs[n_forts++] = buf[2][idx];
+					bbs[n_forts++] = &buf[2][idx];
 				}
 				where[1] = 1;
 			} else if (fort_at(&buf[0][idx], x, (_z - 1) * corners[data->corner].z, &g, NULL)) {
 				if (overlaps(&buf[1][idx], &buf[0][idx])) {
-					bbs[n_forts++] = buf[0][idx];
+					bbs[n_forts++] = &buf[0][idx];
 				}
 				where[1] = -1;
 			}
@@ -339,7 +349,7 @@ void *do_it(void *arg)
 			int fourth_z = (_z + where[1]) * corners[data->corner].z;
 			if (n_forts == 3 && fort_at(&fourth, fourth_x, fourth_z, &g, NULL) && overlaps(&buf[1][idx], &fourth) &&
 			    overlaps(&buf[1 + where[0]][idx], &fourth) && overlaps(&buf[1][idx + where[0]], &fourth)) {
-				bbs[n_forts++] = fourth;
+				bbs[n_forts++] = &fourth;
 			}
 			/*
 			if (n_forts == 3 && fort_at(fourth, fourth_x, fourth_z, &g, NULL) && overlaps(&buf[1][idx], fourth)) {
