@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "arg.h"
 #include "biomes.h"
@@ -15,7 +16,7 @@
 #define MAX_PIECES 400
 // as per mc wiki
 #define REGIONSIZE 432
-int n_threads = 24;
+#define BIGGEST_LEN 10
 
 typedef unsigned long long ull;
 typedef struct {
@@ -38,6 +39,18 @@ typedef struct {
 	int pieces;
 } BoundBox;
 
+int n_threads = 24;
+int64_t seed;
+int64_t start = 3750000;
+int64_t end = 30000000;
+ull smallest[4];
+Result biggest[4][BIGGEST_LEN];
+Pos corners[4] = {{1, 1}, {1, -1}, {-1, 1}, {-1, -1}};
+char *names[4] = {"single", "double", "triple", "quad"};
+char *argv0;
+pthread_mutex_t printlock;
+pthread_mutex_t sortlock[4];
+
 void result_set(Result *a, Result *b)
 {
 	for (int i = 0; i < 4; i++) {
@@ -49,20 +62,6 @@ void result_set(Result *a, Result *b)
 	a->where.x = b->where.x;
 	a->where.z = b->where.z;
 }
-
-uint64_t seed;
-Pos corners[4] = {{1, 1}, {1, -1}, {-1, 1}, {-1, -1}};
-char *names[4] = {"single", "double", "triple", "quad"};
-int64_t start = 3750000;
-int64_t end = 30000000;
-char *argv0;
-
-pthread_mutex_t printlock;
-pthread_mutex_t sortlock[4];
-#define BIGGEST_LEN 10
-
-Result biggest[4][BIGGEST_LEN];
-ull smallest[4];
 
 void printf_s(const char *fmt, ...)
 {
@@ -87,19 +86,8 @@ void setup(uint64_t real_seed)
 	seed = real_seed & MASK48;
 	start = start / REGIONSIZE + 1;
 	end = end / REGIONSIZE;
-	for (int j = 0; j < 4; j++) {
-		for (int i = 0; i < BIGGEST_LEN; i++) {
-			for (int k = 0; k < 4; k++) {
-				biggest[j][i].size[k].x = 0;
-				biggest[j][i].size[k].y = 0;
-				biggest[j][i].size[k].z = 0;
-			}
-			biggest[j][i].volume = 0;
-			biggest[j][i].where.x = 0;
-			biggest[j][i].where.z = 0;
-		}
-		smallest[j] = 0;
-	}
+	memset(biggest, 0, sizeof(biggest));
+	memset(smallest, 0, sizeof(smallest));
 	pthread_mutex_init(&printlock, NULL);
 	for (int i = 0; i < 4; i++) {
 		pthread_mutex_init(&sortlock[i], NULL);
@@ -147,7 +135,8 @@ BoundBox intersect_n(BoundBox *bbs, int *idx, int n)
 
 ull union_n(BoundBox *bbs, int n)
 {
-	ull total = 0;
+	ull total = 0, volume;
+	BoundBox inter;
 
 	for (int mask = 1; mask < (1 << n); mask++) {
 		int idx[4] = {0}, k = 0;
@@ -157,8 +146,8 @@ ull union_n(BoundBox *bbs, int n)
 				idx[k++] = i;
 		}
 
-		BoundBox inter = intersect_n(bbs, idx, k);
-		ull volume = bb_volume(&inter);
+		inter = intersect_n(bbs, idx, k);
+		volume = bb_volume(&inter);
 
 		if (k % 2 == 1)
 			total += volume;
@@ -179,15 +168,6 @@ void is_big(BoundBox bbs[4], int n_forts, Pos *pos, int tid)
 		size[i].y = bbs[i].end.y - bbs[i].start.y;
 		size[i].z = bbs[i].end.z - bbs[i].start.z;
 	}
-	/*
-	ull volume = 0;
-	for (int i = 0; i <= n_forts; i++) {
-	    size[i].x = bbs[i].end.x - bbs[i].start.x;
-	    size[i].y = bbs[i].end.y - bbs[i].start.y;
-	    size[i].z = bbs[i].end.z - bbs[i].start.z;
-	    volume += size[i].x * size[i].y * size[i].z;
-	}
-	*/
 
 	if (volume < smallest[n_forts])
 		return;
@@ -374,16 +354,7 @@ void *do_it(void *arg)
 		buf[0] = buf[1];
 		buf[1] = buf[2];
 		buf[2] = tmp;
-		for (int i = 0; i < bufsize; i++) {
-			buf[2][i].checked = 0;
-			buf[2][i].pieces = 0;
-			buf[2][i].start.x = 0;
-			buf[2][i].start.y = 0;
-			buf[2][i].start.z = 0;
-			buf[2][i].end.x = 0;
-			buf[2][i].end.y = 0;
-			buf[2][i].end.z = 0;
-		}
+		memset(buf[2], 0, bufsize * sizeof(BoundBox));
 	}
 
 	printf_s("killing thread %d ...\n", data->thread_id);
@@ -410,10 +381,14 @@ void usage(void)
 
 int main(int argc, char **argv)
 {
-	LONG_ARGSTRUCT{{"help", 'h'}, {"seed", 'S'}, {"start", 's'}, {"end", 'e'}, {"jobs", 'j'}, {"corner", 'c'}};
-
-	int can_i_do_shit = false, i = 0;
+	int can_i_do_shit = false, i = 0, chunk_size;
 	uint64_t real_seed = 0;
+	FILE *f;
+	char size_str[127], buf[100];
+	pthread_t *threads;
+	ThreadData *tdata;
+
+	LONG_ARGSTRUCT{{"help", 'h'}, {"seed", 'S'}, {"start", 's'}, {"end", 'e'}, {"jobs", 'j'}, {"corner", 'c'}};
 
 	ELONG_ARGBEGIN(usage())
 	{
@@ -432,9 +407,17 @@ int main(int argc, char **argv)
 		break;
 	case 'j':
 		n_threads = strtol(EARGF(usage()), NULL, 0);
+		if (n_threads < 1) {
+			fprintf(stderr, "number of threads must be no smaller than 1\n");
+			usage();
+		}
 		break;
 	case 'c':
 		i = strtol(EARGF(usage()), NULL, 0) - 1;
+		if (i < 0 || i > 3) {
+			fprintf(stderr, "corner must be in range 1-4\n");
+			usage();
+		}
 	}
 	ARGEND;
 
@@ -442,16 +425,21 @@ int main(int argc, char **argv)
 		usage();
 	}
 
-	printf("start = %lu, end = %lu, n_threads = %d, seed = %lu\n", start, end, n_threads, real_seed);
-
-	pthread_t threads[n_threads];
-	ThreadData tdata[n_threads];
+	threads = malloc(n_threads * sizeof(pthread_t));
+	if (threads == NULL) {
+		fprintf(stderr, "out of memory\n");
+		exit(2);
+	}
+	tdata = malloc(n_threads * sizeof(ThreadData));
+	if (tdata == NULL) {
+		free(threads);
+		fprintf(stderr, "out of memory\n");
+		exit(2);
+	}
 
 	setup(real_seed);
 
-	int chunk_size = (end - start) / n_threads + 1;
-	FILE *f;
-	char size_str[127];
+	chunk_size = (end - start) / n_threads + 1;
 
 	for (; i < 4; i++) {
 		for (int t = 0; t < n_threads; t++) {
@@ -519,7 +507,7 @@ int main(int argc, char **argv)
 	}
 
 	if (f == stdout)
-		return 0;
+		goto cleanup;
 
 	fclose(f);
 
@@ -528,10 +516,13 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	char buf[100];
 	while (fgets(buf, sizeof(buf), f) != NULL) {
 		printf("%s", buf);
 	}
+
+cleanup:
+	free(threads);
+	free(tdata);
 
 	return 0;
 }
