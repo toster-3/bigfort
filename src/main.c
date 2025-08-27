@@ -167,7 +167,6 @@ void is_big(BoundBox *bbs[4], int n_forts, Pos *pos, int tid)
 
 	for (int i = 0; i < n_forts + 1; i++) {
 		if (bbs[i]->counted[n_forts]) {
-			printf_s("hi hi hello\n");
 			return;
 		}
 	}
@@ -184,7 +183,7 @@ void is_big(BoundBox *bbs[4], int n_forts, Pos *pos, int tid)
 	pthread_mutex_lock(&sortlock[n_forts]);
 
 	if (volume > biggest[n_forts][BIGGEST_LEN - 1].volume) {
-		for (int i = 0; i < n_forts; i++) {
+		for (int i = 0; i <= n_forts; i++) {
 			bbs[i]->counted[n_forts] = true;
 			biggest[n_forts][BIGGEST_LEN - 1].size[i].x = size[i].x;
 			biggest[n_forts][BIGGEST_LEN - 1].size[i].y = size[i].y;
