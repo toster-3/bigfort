@@ -173,7 +173,7 @@ void is_big(BoundBox bbs[4], int n_forts, Pos *pos, int tid)
 {
 	Pos3 size[4];
 	char size_str[127];
-	ull volume = union_n(bbs, n_forts);
+	ull volume = union_n(bbs, n_forts + 1);
 	for (int i = 0; i <= n_forts; i++) {
 		size[i].x = bbs[i].end.x - bbs[i].start.x;
 		size[i].y = bbs[i].end.y - bbs[i].start.y;
@@ -398,20 +398,21 @@ void usage(void)
 	fprintf(stderr,
 	        "Usage: %s -S <SEED>\n"
 	        "Options:\n"
-	        "\t-h | --help           : show this help message\n"
-	        "\t-S | --seed <SEED>    : set the seed\n"
-	        "\t-s | --start <START>  : set starting coordinate\n"
-	        "\t-e | --end   <END>    : set ending coordinate\n"
-	        "\t-j | --jobs <THREADS> : use <THREADS> threads, 24 by default\n",
+	        "\t-h | --help            : show this help message\n"
+	        "\t-S | --seed <SEED>     : set the seed\n"
+	        "\t-s | --start <START>   : set starting coordinate\n"
+	        "\t-e | --end <END>       : set ending coordinate\n"
+	        "\t-j | --jobs <THREADS>  : use <THREADS> threads, 24 by default\n"
+	        "\t-c | --corner <CORNER> : start from <CORNER>, 1-4, this is useful if something crashes\n",
 	        argv0);
 	exit(0);
 }
 
 int main(int argc, char **argv)
 {
-	LONG_ARGSTRUCT{{"help", 'h'}, {"seed", 'S'}, {"start", 's'}, {"end", 'e'}, {"jobs", 'j'}};
+	LONG_ARGSTRUCT{{"help", 'h'}, {"seed", 'S'}, {"start", 's'}, {"end", 'e'}, {"jobs", 'j'}, {"corner", 'c'}};
 
-	int can_i_do_shit = false;
+	int can_i_do_shit = false, i = 0;
 	uint64_t real_seed = 0;
 
 	ELONG_ARGBEGIN(usage())
@@ -431,6 +432,9 @@ int main(int argc, char **argv)
 		break;
 	case 'j':
 		n_threads = strtol(EARGF(usage()), NULL, 0);
+		break;
+	case 'c':
+		i = strtol(EARGF(usage()), NULL, 0) - 1;
 	}
 	ARGEND;
 
@@ -446,8 +450,10 @@ int main(int argc, char **argv)
 	setup(real_seed);
 
 	int chunk_size = (end - start) / n_threads + 1;
+	FILE *f;
+	char size_str[127];
 
-	for (int i = 0; i < 4; i++) {
+	for (; i < 4; i++) {
 		for (int t = 0; t < n_threads; t++) {
 			tdata[t].thread_id = t;
 			tdata[t].start = start + t * chunk_size;
@@ -468,18 +474,42 @@ int main(int argc, char **argv)
 		       "!! corner %d done !!\n"
 		       "====================\n",
 		       i + 1);
+		switch (i) {
+		case 0:
+			f = fopen("results_1.txt", "w");
+			break;
+		case 1:
+			f = fopen("results_2.txt", "w");
+			break;
+		case 2:
+			f = fopen("results_3.txt", "w");
+			break;
+		default:
+			f = stdout;
+		}
+		if (i < 3) {
+			for (int i = 0; i < 4; i++) {
+				fprintf(f, "%ss:\n", names[i]);
+				for (int j = 0; j < BIGGEST_LEN; j++) {
+					strsize(size_str, biggest[i][j].size, i);
+					fprintf(f, "%d. %s (%llu) at %d %d\n", j + 1, size_str, biggest[i][j].volume, biggest[i][j].where.x,
+					        biggest[i][j].where.z);
+				}
+			}
+
+			fclose(f);
+		}
 	}
 
-	for (int i = 0; i < 4; i++) {
+	for (i = 0; i < 4; i++) {
 		qsort(biggest[i], BIGGEST_LEN, sizeof(Result), cmp);
 	}
-	char size_str[127];
-	FILE *f = fopen("results.txt", "w");
+	f = fopen("results.txt", "w");
 	if (f == NULL) {
 		f = stdout;
 	}
 
-	for (int i = 0; i < 4; i++) {
+	for (i = 0; i < 4; i++) {
 		fprintf(f, "%ss:\n", names[i]);
 		for (int j = 0; j < BIGGEST_LEN; j++) {
 			strsize(size_str, biggest[i][j].size, i);
